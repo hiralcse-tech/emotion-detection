@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import os
 import pandas as pd
+import requests
 
 # -----------------------------
 # CONFIG
@@ -35,21 +36,15 @@ def load_model():
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    try:
-        # Try loading as state_dict
-        state_dict = torch.load(MODEL_PATH, map_location="cpu")
-        model.load_state_dict(state_dict)
-        st.success("✅ Loaded model successfully")
-
-    except:
-        # If fails → load full model
-        model = torch.load(MODEL_PATH, map_location="cpu")
-        st.warning("⚠️ Loaded full model instead")
+    # ✅ Load weights as state_dict only (fixes _pickle.UnpicklingError)
+    state_dict = torch.load(MODEL_PATH, map_location="cpu")
+    model.load_state_dict(state_dict)
+    st.success("✅ Model loaded successfully")
 
     model.eval()
     return model
 
-# **🔥 IMPORTANT: actually load the model here**
+# Load the model once
 model = load_model()
 
 # -----------------------------
@@ -73,7 +68,7 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# PREPROCESS
+# PREPROCESS FACE
 # -----------------------------
 def preprocess_face(face):
     face = cv2.resize(face, (96, 96))
@@ -84,7 +79,7 @@ def preprocess_face(face):
     return face
 
 # -----------------------------
-# PREDICT
+# PREDICT FUNCTION
 # -----------------------------
 def predict(face, model):
     face = preprocess_face(face)
@@ -98,17 +93,19 @@ def predict(face, model):
     return probs
 
 # -----------------------------
-# UI
+# STREAMLIT UI
 # -----------------------------
 st.subheader("📷 Upload Image")
 file = st.file_uploader("Upload an image", type=["jpg", "png"])
 
 if file is not None:
 
+    # Read image
     file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, 1)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+    # Detect faces
     faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
     if len(faces) == 0:
@@ -126,24 +123,24 @@ if file is not None:
 
             face = img[y1:y2, x1:x2]
 
-            # ✅ Make prediction using the loaded model
+            # Predict emotion
             probs = predict(face, model)
             conf, pred = torch.max(probs, 0)
 
-            # Emotion decision
+            # Decide emotion
             if conf < 0.4:
                 emotion = "Uncertain"
             else:
                 emotion = classes[pred]
 
-            # Draw box
-            cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+            # Draw box & label
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
             cv2.putText(img,
                         f"{emotion} ({conf*100:.1f}%)",
-                        (x, y-10),
+                        (x, y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.8,
-                        (0,255,0),
+                        (0, 255, 0),
                         2)
 
             # -----------------------------
@@ -166,4 +163,5 @@ if file is not None:
                     f"{classes[top3.indices[i]]} → {top3.values[i]*100:.2f}%"
                 )
 
+        # Show annotated image
         st.image(img, channels="BGR")
