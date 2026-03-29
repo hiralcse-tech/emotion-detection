@@ -19,12 +19,13 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL
+# LOAD MODEL (HUGGINGFACE)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
-    url = "https://drive.google.com/uc?export=download&id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
+    # 🔥 PASTE YOUR HUGGINGFACE LINK HERE
+    url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
 
     # Download model
     if not os.path.exists(MODEL_PATH):
@@ -37,11 +38,11 @@ def load_model():
     size = os.path.getsize(MODEL_PATH)
     st.write("📦 Model size:", size)
 
-    if size < 1000000:
-        st.error("❌ Model download failed. Check Google Drive sharing.")
+    if size < 10000000:
+        st.error("❌ Model download failed. Check HuggingFace link.")
         st.stop()
 
-    # Create model
+    # Load model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
@@ -57,15 +58,15 @@ def load_model():
 
         model.load_state_dict(new_state_dict, strict=False)
 
-    except Exception as e:
-        st.error("❌ Model loading failed (corrupted or wrong format)")
+    except Exception:
+        st.error("❌ Model loading failed (wrong format or corrupted file)")
         st.stop()
 
     model.eval()
     return model
 
 
-# Load model globally
+# Load model
 model = load_model()
 
 # -----------------------------
@@ -131,7 +132,7 @@ def generate_gradcam(model, image_tensor, target_class):
 # -----------------------------
 def predict(face):
 
-    global model  # FIX for NameError
+    global model
 
     face = cv2.resize(face, (96, 96))
 
