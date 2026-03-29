@@ -6,8 +6,8 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import requests
 import os
+import gdown
 
 # -----------------------------
 # CONFIG
@@ -19,24 +19,25 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (LIGHTWEIGHT)
+# LOAD MODEL
 # -----------------------------
 @st.cache_resource
 def load_model():
 
-    url = "https://drive.google.com/file/d/1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx/view?usp=sharing"
+    file_id = "1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx"
+    url = f"https://drive.google.com/uc?id={file_id}"
 
+    # Download model if not exists
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
-            r = requests.get(url)
-            with open(MODEL_PATH, "wb") as f:
-                f.write(r.content)
+            gdown.download(url, MODEL_PATH, quiet=False)
 
-    # Safety check
+    # Check file size (avoid corrupted download)
     if os.path.getsize(MODEL_PATH) < 10000000:
-        st.error("❌ Model download failed")
+        st.error("❌ Model download failed. Check Drive sharing.")
         st.stop()
 
+    # Load model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
@@ -50,10 +51,10 @@ def load_model():
 model = load_model()
 
 # -----------------------------
-# TRANSFORM (LIGHT)
+# TRANSFORM (LIGHTWEIGHT)
 # -----------------------------
 transform = transforms.Compose([
-    transforms.Resize((64, 64)),  # reduced size
+    transforms.Resize((64, 64)),
     transforms.Grayscale(num_output_channels=3),
     transforms.ToTensor(),
     transforms.Normalize([0.5]*3, [0.5]*3)
@@ -67,9 +68,9 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# PREDICT
+# PREDICT FUNCTION
 # -----------------------------
-def predict(face):
+def predict(face, model):
 
     face = cv2.resize(face, (64, 64))
 
@@ -105,11 +106,12 @@ if file is not None:
         for (x, y, w, h) in faces:
             face = img[y:y+h, x:x+w]
 
-            pred, conf = predict(face)
+            pred, conf = predict(face, model)
             emotion = classes[pred]
 
-            # Draw box
+            # Draw bounding box
             cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+
             cv2.putText(img,
                         f"{emotion} ({conf*100:.1f}%)",
                         (x, y-10),
