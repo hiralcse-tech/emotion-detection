@@ -6,146 +6,188 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import os
-import pandas as pd
 import requests
-import mediapipe as mp
+import os
 
 # -----------------------------
 # CONFIG
 # -----------------------------
-st.set_page_config(page_title="Emotion Detection", layout="centered")
-st.title("😊 Emotion Detection System (Aligned Faces)")
+st.set_page_config(page_title="Emotion AI", layout="centered")
+st.title("😊 Emotion Detection + Explainable AI")
 
 classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL
+# LOAD MODEL (HUGGINGFACE)
 # -----------------------------
 @st.cache_resource
 def load_model():
+
+    # 🔥 PASTE YOUR HUGGINGFACE LINK HERE
     url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
 
+    # Download model
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
             r = requests.get(url)
             with open(MODEL_PATH, "wb") as f:
                 f.write(r.content)
 
+    # Check file size
+    size = os.path.getsize(MODEL_PATH)
+    st.write("📦 Model size:", size)
+
+    if size < 10000000:
+        st.error("❌ Model download failed. Check HuggingFace link.")
+        st.stop()
+
+    # Load model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state_dict)
-    st.success("✅ Model loaded successfully")
+    try:
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+
+        # Fix if saved with DataParallel
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("module."):
+                k = k[7:]
+            new_state_dict[k] = v
+
+        model.load_state_dict(new_state_dict, strict=False)
+
+    except Exception:
+        st.error("❌ Model loading failed (wrong format or corrupted file)")
+        st.stop()
+
     model.eval()
     return model
 
+
+# Load model
 model = load_model()
 
 # -----------------------------
 # TRANSFORM
 # -----------------------------
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((96, 96)),
+    transforms.Grayscale(num_output_channels=3),
     transforms.ToTensor(),
-    transforms.Normalize(
-        [0.485, 0.456, 0.406],
-        [0.229, 0.224, 0.225]
-    )
+    transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
 # -----------------------------
-# FACE DETECTION + ALIGNMENT
+# FACE DETECTOR
 # -----------------------------
-mp_face_mesh = mp.solutions.face_mesh
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+)
 
-def align_face(image, box):
-    x, y, w, h = box
-    face = image[y:y+h, x:x+w]
-    img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+# -----------------------------
+# GRAD-CAM
+# -----------------------------
+def generate_gradcam(model, image_tensor, target_class):
 
-    with mp_face_mesh.FaceMesh(static_image_mode=True) as face_mesh:
-        results = face_mesh.process(img_rgb)
-        if results.multi_face_landmarks:
-            # Use first face landmarks
-            landmarks = results.multi_face_landmarks[0].landmark
-            left_eye = landmarks[33]  # approx left eye
-            right_eye = landmarks[263]  # approx right eye
+    gradients = []
+    activations = []
 
-            # Compute rotation angle
-            eye_dx = right_eye.x - left_eye.x
-            eye_dy = right_eye.y - left_eye.y
-            angle = np.arctan2(eye_dy, eye_dx) * 180.0 / np.pi
+    def forward_hook(module, input, output):
+        activations.append(output)
 
-            # Rotate the whole image around the face center
-            center = (x + w//2, y + h//2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
-            face = aligned[y:y+h, x:x+w]
+    def backward_hook(module, grad_in, grad_out):
+        gradients.append(grad_out[0])
 
-    return face
+    layer = model.layer4[-1].conv2
+    layer.register_forward_hook(forward_hook)
+    layer.register_full_backward_hook(backward_hook)
+
+    output = model(image_tensor)
+    loss = output[0, target_class]
+
+    model.zero_grad()
+    loss.backward()
+
+    grads = gradients[0].cpu().detach().numpy()[0]
+    acts = activations[0].cpu().detach().numpy()[0]
+
+    weights = np.mean(grads, axis=(1, 2))
+    cam = np.zeros(acts.shape[1:], dtype=np.float32)
+
+    for i, w in enumerate(weights):
+        cam += w * acts[i]
+
+    cam = np.maximum(cam, 0)
+    cam = cv2.resize(cam, (96, 96))
+
+    if cam.max() != 0:
+        cam = cam / cam.max()
+
+    return cam
 
 # -----------------------------
 # PREDICT
 # -----------------------------
-def predict(face, model):
-    face = cv2.resize(face, (224, 224))
-    face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+def predict(face):
+
+    global model
+
+    face = cv2.resize(face, (96, 96))
+
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
 
     with torch.no_grad():
         output = model(img_t)
-        probs = torch.softmax(output, dim=1)[0]
+        probs = torch.softmax(output, dim=1)
+        conf, pred = torch.max(probs, 1)
 
-    return probs
+    return pred.item(), conf.item(), img_t
 
 # -----------------------------
-# STREAMLIT UI
+# UI
 # -----------------------------
 st.subheader("📷 Upload Image")
-file = st.file_uploader("Upload an image", type=["jpg", "png"])
 
-if file is not None:
-    file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, 1)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+if files:
+    for file in files:
+        st.markdown("---")
 
-    if len(faces) == 0:
-        st.warning("No face detected 😢")
-        st.image(img, channels="BGR")
-    else:
-        for i, (x, y, w, h) in enumerate(faces):
-            face = align_face(img, (x, y, w, h))
+        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-            probs = predict(face, model)
-            conf, pred = torch.max(probs, 0)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-            emotion = classes[pred] if conf > 0.4 else "Uncertain"
+        if len(faces) == 0:
+            st.warning("No face detected 😢")
+            st.image(img, channels="BGR")
+            continue
 
-            # Draw box & label
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(img,
-                        f"{emotion} ({conf*100:.1f}%)",
-                        (x, y - 10),
+        for (x,y,w,h) in faces:
+            face = img[y:y+h, x:x+w]
+
+            pred, conf, img_t = predict(face)
+            emotion = classes[pred]
+
+            # Grad-CAM
+            cam = generate_gradcam(model, img_t, pred)
+            heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
+            heatmap = cv2.resize(heatmap, (w,h))
+
+            overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
+
+            # Draw box
+            cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
+            cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
+                        (x,y-10),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (0, 255, 0),
-                        2)
+                        0.8,(0,255,0),2)
 
-            # Display each face’s probability chart
-            st.subheader(f"📊 Emotion Probabilities (Face {i+1})")
-            df = pd.DataFrame({"Emotion": classes, "Confidence": probs.numpy()})
-            st.bar_chart(df.set_index("Emotion"))
-
-            st.subheader(f"🧠 Top 3 Predictions (Face {i+1})")
-            top3 = torch.topk(probs, 3)
-            for j in range(3):
-                st.write(f"{classes[top3.indices[j]]} → {top3.values[j]*100:.2f}%")
+            st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
 
         st.image(img, channels="BGR")
