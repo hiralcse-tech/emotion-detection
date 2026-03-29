@@ -6,43 +6,41 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
+import requests
 import os
-import gdown
 
 # -----------------------------
 # CONFIG
 # -----------------------------
 st.set_page_config(page_title="Emotion Detection", layout="centered")
-st.title("😊 Emotion Detection App")
+st.title("😊 Emotion Detection (Improved Accuracy)")
 
 classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL
+# LOAD MODEL (HUGGINGFACE)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
-    file_id = "1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx"
     url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
 
-    # Download model if not exists
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
-            gdown.download(url, MODEL_PATH, quiet=False)
+            r = requests.get(url)
+            with open(MODEL_PATH, "wb") as f:
+                f.write(r.content)
 
-    # Check file size (avoid corrupted download)
     if os.path.getsize(MODEL_PATH) < 10000000:
-        st.error("❌ Model download failed. Check Drive sharing.")
+        st.error("❌ Model download failed")
         st.stop()
 
-    # Load model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
     state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict)
 
     model.eval()
     return model
@@ -51,13 +49,16 @@ def load_model():
 model = load_model()
 
 # -----------------------------
-# TRANSFORM (LIGHTWEIGHT)
+# BETTER TRANSFORM (IMPORTANT)
 # -----------------------------
 transform = transforms.Compose([
-    transforms.Resize((64, 64)),
+    transforms.Resize((96, 96)),  # improved from 64
     transforms.Grayscale(num_output_channels=3),
     transforms.ToTensor(),
-    transforms.Normalize([0.5]*3, [0.5]*3)
+    transforms.Normalize(
+        [0.485, 0.456, 0.406],   # ImageNet mean
+        [0.229, 0.224, 0.225]
+    )
 ])
 
 # -----------------------------
@@ -68,11 +69,27 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# PREDICT FUNCTION
+# PREPROCESS FACE (ENHANCED)
+# -----------------------------
+def preprocess_face(face):
+
+    # Resize
+    face = cv2.resize(face, (96, 96))
+
+    # Sharpen image (improves features)
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5,-1],
+                       [0, -1, 0]])
+    face = cv2.filter2D(face, -1, kernel)
+
+    return face
+
+# -----------------------------
+# PREDICT
 # -----------------------------
 def predict(face, model):
 
-    face = cv2.resize(face, (64, 64))
+    face = preprocess_face(face)
 
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
@@ -104,12 +121,25 @@ if file is not None:
         st.image(img, channels="BGR")
     else:
         for (x, y, w, h) in faces:
-            face = img[y:y+h, x:x+w]
+
+            # Padding (IMPORTANT for better context)
+            pad = 15
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(img.shape[1], x + w + pad)
+            y2 = min(img.shape[0], y + h + pad)
+
+            face = img[y1:y2, x1:x2]
 
             pred, conf = predict(face, model)
-            emotion = classes[pred]
 
-            # Draw bounding box
+            # Confidence filter
+            if conf < 0.4:
+                emotion = "Uncertain"
+            else:
+                emotion = classes[pred]
+
+            # Draw box
             cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
 
             cv2.putText(img,
