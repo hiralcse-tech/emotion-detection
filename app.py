@@ -43,8 +43,7 @@ def load_model():
     model.load_state_dict(state_dict, strict=False)
 
     model.eval()
-    return model)
-
+    return model
 # -----------------------------
 # TRANSFORM
 # -----------------------------
