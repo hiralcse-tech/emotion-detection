@@ -6,7 +6,8 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+import gdown
+import os
 
 # -----------------------------
 # CONFIG
@@ -15,16 +16,24 @@ st.set_page_config(page_title="Emotion AI", layout="centered")
 st.title("😊 Emotion Detection + Explainable AI")
 
 classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL
+# LOAD MODEL (WITH DOWNLOAD)
 # -----------------------------
 @st.cache_resource
 def load_model():
+
+    if not os.path.exists(MODEL_PATH):
+        url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
+        gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
+
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
-    model.load_state_dict(torch.load("emotion_model.pth", map_location="cpu"))
+
+    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
     model.eval()
+
     return model
 
 model = load_model()
@@ -47,29 +56,31 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# GRAD-CAM
+# GRAD-CAM (FIXED)
 # -----------------------------
 def generate_gradcam(model, image_tensor, target_class):
+
     gradients = []
     activations = []
-
-    def backward_hook(module, grad_in, grad_out):
-        gradients.append(grad_out[0])
 
     def forward_hook(module, input, output):
         activations.append(output)
 
-    layer = model.layer4[1].conv2
+    def backward_hook(module, grad_in, grad_out):
+        gradients.append(grad_out[0])
+
+    layer = model.layer4[-1].conv2
     layer.register_forward_hook(forward_hook)
-    layer.register_backward_hook(backward_hook)
+    layer.register_full_backward_hook(backward_hook)
 
     output = model(image_tensor)
     loss = output[0, target_class]
+
     model.zero_grad()
     loss.backward()
 
-    grads = gradients[0].cpu().data.numpy()[0]
-    acts = activations[0].cpu().data.numpy()[0]
+    grads = gradients[0].cpu().detach().numpy()[0]
+    acts = activations[0].cpu().detach().numpy()[0]
 
     weights = np.mean(grads, axis=(1, 2))
     cam = np.zeros(acts.shape[1:], dtype=np.float32)
@@ -79,7 +90,9 @@ def generate_gradcam(model, image_tensor, target_class):
 
     cam = np.maximum(cam, 0)
     cam = cv2.resize(cam, (96, 96))
-    cam = cam / cam.max()
+
+    if cam.max() != 0:
+        cam = cam / cam.max()
 
     return cam
 
@@ -87,6 +100,9 @@ def generate_gradcam(model, image_tensor, target_class):
 # PREDICTION
 # -----------------------------
 def predict(face):
+
+    face = cv2.resize(face, (96, 96))  # 🔥 IMPORTANT FIX
+
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
 
@@ -98,81 +114,45 @@ def predict(face):
     return pred.item(), conf.item(), img_t
 
 # -----------------------------
-# MODE SELECTION
+# IMAGE MODE ONLY (CLOUD SAFE)
 # -----------------------------
-mode = st.radio("Choose Mode", ["📷 Upload Image", "🎥 Webcam"])
+st.subheader("📷 Upload Image")
 
-# -----------------------------
-# 📷 IMAGE MODE
-# -----------------------------
-if mode == "📷 Upload Image":
+files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
 
-    files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
+if files:
+    for file in files:
+        st.markdown("---")
 
-    if files:
-        for file in files:
-            st.markdown("---")
+        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-            file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-            img = cv2.imdecode(file_bytes, 1)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-            for (x,y,w,h) in faces:
-                face = img[y:y+h, x:x+w]
-
-                pred, conf, img_t = predict(face)
-                emotion = classes[pred]
-
-                # Grad-CAM
-                cam = generate_gradcam(model, img_t, pred)
-                heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
-                heatmap = cv2.resize(heatmap, (w,h))
-                overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
-
-                # Draw box
-                cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
-                cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
-                            (x,y-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,(0,255,0),2)
-
-                st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
-
-            st.image(img, channels="BGR")
-
-# -----------------------------
-# 🎥 WEBCAM MODE
-# -----------------------------
-elif mode == "🎥 Webcam":
-
-    run = st.checkbox("Start Webcam")
-
-    cap = cv2.VideoCapture(0)
-    frame_window = st.image([])
-
-    while run:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Camera error")
-            break
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-        for (x,y,w,h) in faces:
-            face = frame[y:y+h, x:x+w]
+        if len(faces) == 0:
+            st.warning("No face detected 😢")
+            st.image(img, channels="BGR")
+            continue
 
-            pred, conf, _ = predict(face)
+        for (x,y,w,h) in faces:
+            face = img[y:y+h, x:x+w]
+
+            pred, conf, img_t = predict(face)
             emotion = classes[pred]
 
-            cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
-            cv2.putText(frame, f"{emotion} ({conf*100:.1f}%)",
+            cam = generate_gradcam(model, img_t, pred)
+            heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
+            heatmap = cv2.resize(heatmap, (w,h))
+
+            overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
+
+            cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
+            cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
                         (x,y-10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.8,(0,255,0),2)
 
-        frame_window.image(frame, channels="BGR")
+            st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
 
-    cap.release()
+        st.image(img, channels="BGR")
