@@ -6,7 +6,6 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import requests
 import os
 import pandas as pd
 
@@ -24,12 +23,10 @@ MODEL_PATH = "emotion_model.pth"
 # -----------------------------
 @st.cache_resource
 def load_model():
-
     url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
 
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
-            import requests
             r = requests.get(url)
             with open(MODEL_PATH, "wb") as f:
                 f.write(r.content)
@@ -42,7 +39,7 @@ def load_model():
         # Try loading as state_dict
         state_dict = torch.load(MODEL_PATH, map_location="cpu")
         model.load_state_dict(state_dict)
-        st.success("✅ Loaded as state_dict")
+        st.success("✅ Loaded model successfully")
 
     except:
         # If fails → load full model
@@ -51,6 +48,9 @@ def load_model():
 
     model.eval()
     return model
+
+# **🔥 IMPORTANT: actually load the model here**
+model = load_model()
 
 # -----------------------------
 # TRANSFORM
@@ -87,9 +87,7 @@ def preprocess_face(face):
 # PREDICT
 # -----------------------------
 def predict(face, model):
-
     face = preprocess_face(face)
-
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
 
@@ -103,7 +101,6 @@ def predict(face, model):
 # UI
 # -----------------------------
 st.subheader("📷 Upload Image")
-
 file = st.file_uploader("Upload an image", type=["jpg", "png"])
 
 if file is not None:
@@ -129,8 +126,8 @@ if file is not None:
 
             face = img[y1:y2, x1:x2]
 
+            # ✅ Make prediction using the loaded model
             probs = predict(face, model)
-
             conf, pred = torch.max(probs, 0)
 
             # Emotion decision
@@ -141,7 +138,6 @@ if file is not None:
 
             # Draw box
             cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
-
             cv2.putText(img,
                         f"{emotion} ({conf*100:.1f}%)",
                         (x, y-10),
@@ -154,21 +150,17 @@ if file is not None:
             # 📊 PROBABILITY CHART
             # -----------------------------
             st.subheader("📊 Emotion Probabilities")
-
             df = pd.DataFrame({
                 "Emotion": classes,
                 "Confidence": probs.numpy()
             })
-
             st.bar_chart(df.set_index("Emotion"))
 
             # -----------------------------
             # 🧠 TOP 3 PREDICTIONS
             # -----------------------------
             st.subheader("🧠 Top Predictions")
-
             top3 = torch.topk(probs, 3)
-
             for i in range(3):
                 st.write(
                     f"{classes[top3.indices[i]]} → {top3.values[i]*100:.2f}%"
