@@ -1,1 +1,1 @@
-https://drive.google.com/uc?id=1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx
+https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth
