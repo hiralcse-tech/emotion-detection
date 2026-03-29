@@ -26,35 +26,34 @@ def load_model():
 
     url = "https://drive.google.com/uc?export=download&id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
 
-    # Download if not exists
+    # Download model
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
-            response = requests.get(url)
+            r = requests.get(url)
             with open(MODEL_PATH, "wb") as f:
-                f.write(response.content)
+                f.write(r.content)
 
-    st.write("📦 Model size:", os.path.getsize(MODEL_PATH))
+    # 🚨 CHECK FILE VALIDITY
+    size = os.path.getsize(MODEL_PATH)
+    st.write("📦 Model size:", size)
 
-    # Load as state_dict (most stable)
+    if size < 1000000:
+        st.error("❌ Model download failed (file too small)")
+        st.stop()
+
+    # Load model safely
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-
-    # Remove 'module.' if present
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("module."):
-            k = k[7:]
-        new_state_dict[k] = v
-
-    model.load_state_dict(new_state_dict, strict=False)
+    try:
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+        model.load_state_dict(state_dict, strict=False)
+    except Exception as e:
+        st.error("❌ Model loading failed → file is corrupted")
+        st.stop()
 
     model.eval()
     return model
-
-
-model = load_model()
 
 # -----------------------------
 # TRANSFORM
