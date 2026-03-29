@@ -19,12 +19,13 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (WITH DOWNLOAD)
+# LOAD MODEL (FIXED)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
-    if not os.path.exists(MODEL_PATH):
+    # Re-download if file missing or corrupted
+    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 1000000:
         url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
         gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
 
@@ -56,7 +57,7 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# GRAD-CAM (FIXED)
+# GRAD-CAM
 # -----------------------------
 def generate_gradcam(model, image_tensor, target_class):
 
@@ -101,7 +102,7 @@ def generate_gradcam(model, image_tensor, target_class):
 # -----------------------------
 def predict(face):
 
-    face = cv2.resize(face, (96, 96))  # 🔥 IMPORTANT FIX
+    face = cv2.resize(face, (96, 96))
 
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
@@ -114,7 +115,7 @@ def predict(face):
     return pred.item(), conf.item(), img_t
 
 # -----------------------------
-# IMAGE MODE ONLY (CLOUD SAFE)
+# UI - IMAGE UPLOAD
 # -----------------------------
 st.subheader("📷 Upload Image")
 
@@ -141,12 +142,14 @@ if files:
             pred, conf, img_t = predict(face)
             emotion = classes[pred]
 
+            # Grad-CAM
             cam = generate_gradcam(model, img_t, pred)
             heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
             heatmap = cv2.resize(heatmap, (w,h))
 
             overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
+            # Draw bounding box
             cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
             cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
                         (x,y-10),
