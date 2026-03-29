@@ -1,9 +1,8 @@
+streamlit
 torch
 torchvision
-streamlit
-opencv-python-headless
-matplotlib
-scikit-learn
-numpy
-pillow
 gdown
+Pillow
+opencv-python-headless
+numpy
+matplotlib
