@@ -24,7 +24,7 @@ MODEL_PATH = "emotion_model.pth"
 @st.cache_resource
 def load_model():
 
-    url = "https://huggingface.co/YOUR_USERNAME/emotion-model/resolve/main/emotion_model.pth"
+    url = "https://drive.google.com/file/d/1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx/view?usp=sharing"
 
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
