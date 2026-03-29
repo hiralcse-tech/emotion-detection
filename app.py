@@ -29,21 +29,28 @@ def load_model():
 
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
+            import requests
             r = requests.get(url)
             with open(MODEL_PATH, "wb") as f:
                 f.write(r.content)
 
+    # Create model architecture
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state_dict)
+    try:
+        # Try loading as state_dict
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+        model.load_state_dict(state_dict)
+        st.success("✅ Loaded as state_dict")
+
+    except:
+        # If fails → load full model
+        model = torch.load(MODEL_PATH, map_location="cpu")
+        st.warning("⚠️ Loaded full model instead")
 
     model.eval()
     return model
-
-
-model = load_model()
 
 # -----------------------------
 # TRANSFORM
