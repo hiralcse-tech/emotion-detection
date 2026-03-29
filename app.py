@@ -19,40 +19,35 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (FINAL FIXED)
+# LOAD MODEL (FINAL FIX)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
     url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
 
-    # Force fresh download every run (avoids corruption)
-    if os.path.exists(MODEL_PATH):
-        os.remove(MODEL_PATH)
+    if not os.path.exists(MODEL_PATH):
+        gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
 
-    gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
+    st.write("📦 Model size:", os.path.getsize(MODEL_PATH))
 
-    # Debug: check file size
-    file_size = os.path.getsize(MODEL_PATH)
-    st.write("📦 Model file size (bytes):", file_size)
+    # 🔥 Always load as STATE_DICT (most stable method)
+    model = resnet18(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, 6)
 
-    try:
-        # Try loading as state_dict
-        model = resnet18(weights=None)
-        model.fc = nn.Linear(model.fc.in_features, 6)
+    state_dict = torch.load(MODEL_PATH, map_location="cpu")
 
-        state_dict = torch.load(MODEL_PATH, map_location="cpu")
-        model.load_state_dict(state_dict)
+    # 🔥 Fix if saved with 'module.' (DataParallel issue)
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            k = k[7:]
+        new_state_dict[k] = v
 
-        model.eval()
-        return model
+    model.load_state_dict(new_state_dict, strict=False)
 
-    except Exception as e:
-        st.warning("⚠️ Trying alternative loading (full model)...")
-
-        model = torch.load(MODEL_PATH, map_location="cpu")
-        model.eval()
-        return model
+    model.eval()
+    return model
 
 model = load_model()
 
