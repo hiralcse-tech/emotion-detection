@@ -19,7 +19,7 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (FINAL FIXED)
+# LOAD MODEL
 # -----------------------------
 @st.cache_resource
 def load_model():
@@ -33,27 +33,40 @@ def load_model():
             with open(MODEL_PATH, "wb") as f:
                 f.write(r.content)
 
-    # 🚨 CHECK FILE VALIDITY
+    # Check file size
     size = os.path.getsize(MODEL_PATH)
     st.write("📦 Model size:", size)
 
     if size < 1000000:
-        st.error("❌ Model download failed (file too small)")
+        st.error("❌ Model download failed. Check Google Drive sharing.")
         st.stop()
 
-    # Load model safely
+    # Create model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
     try:
         state_dict = torch.load(MODEL_PATH, map_location="cpu")
-        model.load_state_dict(state_dict, strict=False)
+
+        # Fix if saved with DataParallel
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("module."):
+                k = k[7:]
+            new_state_dict[k] = v
+
+        model.load_state_dict(new_state_dict, strict=False)
+
     except Exception as e:
-        st.error("❌ Model loading failed → file is corrupted")
+        st.error("❌ Model loading failed (corrupted or wrong format)")
         st.stop()
 
     model.eval()
     return model
+
+
+# Load model globally
+model = load_model()
 
 # -----------------------------
 # TRANSFORM
@@ -114,9 +127,11 @@ def generate_gradcam(model, image_tensor, target_class):
     return cam
 
 # -----------------------------
-# PREDICTION
+# PREDICT
 # -----------------------------
-def predict(face, model):
+def predict(face):
+
+    global model  # FIX for NameError
 
     face = cv2.resize(face, (96, 96))
 
@@ -155,7 +170,7 @@ if files:
         for (x,y,w,h) in faces:
             face = img[y:y+h, x:x+w]
 
-            pred, conf, img_t = predict(face, model)
+            pred, conf, img_t = predict(face)
             emotion = classes[pred]
 
             # Grad-CAM
@@ -165,7 +180,7 @@ if files:
 
             overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
-            # Draw bounding box
+            # Draw box
             cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
             cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
                         (x,y-10),
