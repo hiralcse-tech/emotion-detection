@@ -19,23 +19,40 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (FIXED)
+# LOAD MODEL (FINAL FIXED)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
-    # Re-download if file missing or corrupted
-    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 1000000:
-        url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
-        gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
+    url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
 
-    model = resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, 6)
+    # Force fresh download every run (avoids corruption)
+    if os.path.exists(MODEL_PATH):
+        os.remove(MODEL_PATH)
 
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
-    model.eval()
+    gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
 
-    return model
+    # Debug: check file size
+    file_size = os.path.getsize(MODEL_PATH)
+    st.write("📦 Model file size (bytes):", file_size)
+
+    try:
+        # Try loading as state_dict
+        model = resnet18(weights=None)
+        model.fc = nn.Linear(model.fc.in_features, 6)
+
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+        model.load_state_dict(state_dict)
+
+        model.eval()
+        return model
+
+    except Exception as e:
+        st.warning("⚠️ Trying alternative loading (full model)...")
+
+        model = torch.load(MODEL_PATH, map_location="cpu")
+        model.eval()
+        return model
 
 model = load_model()
 
@@ -115,7 +132,7 @@ def predict(face):
     return pred.item(), conf.item(), img_t
 
 # -----------------------------
-# UI - IMAGE UPLOAD
+# UI
 # -----------------------------
 st.subheader("📷 Upload Image")
 
@@ -142,14 +159,12 @@ if files:
             pred, conf, img_t = predict(face)
             emotion = classes[pred]
 
-            # Grad-CAM
             cam = generate_gradcam(model, img_t, pred)
             heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
             heatmap = cv2.resize(heatmap, (w,h))
 
             overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
-            # Draw bounding box
             cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
             cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
                         (x,y-10),
