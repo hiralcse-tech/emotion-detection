@@ -25,7 +25,7 @@ MODEL_PATH = "emotion_model.pth"
 def load_model():
 
     file_id = "1C8l-OBBP_TY4UnTHmwLdUAGkehQBgDBx"
-    url = f"https://drive.google.com/uc?id={file_id}"
+    url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
 
     # Download model if not exists
     if not os.path.exists(MODEL_PATH):
