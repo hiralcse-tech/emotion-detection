@@ -12,8 +12,8 @@ import os
 # -----------------------------
 # CONFIG
 # -----------------------------
-st.set_page_config(page_title="Emotion Detection", layout="centered")
-st.title("😊 Emotion Detection (Improved Accuracy)")
+st.set_page_config(page_title="Emotion AI", layout="centered")
+st.title("😊 Emotion Detection + Explainable AI")
 
 classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
@@ -24,41 +24,59 @@ MODEL_PATH = "emotion_model.pth"
 @st.cache_resource
 def load_model():
 
-    url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
+    # 🔥 PASTE YOUR HUGGINGFACE LINK HERE
+    url = "https://huggingface.co/YOUR_USERNAME/emotion-model/resolve/main/emotion_model.pth"
 
+    # Download model
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
             r = requests.get(url)
             with open(MODEL_PATH, "wb") as f:
                 f.write(r.content)
 
-    if os.path.getsize(MODEL_PATH) < 10000000:
-        st.error("❌ Model download failed")
+    # Check file size
+    size = os.path.getsize(MODEL_PATH)
+    st.write("📦 Model size:", size)
+
+    if size < 10000000:
+        st.error("❌ Model download failed. Check HuggingFace link.")
         st.stop()
 
+    # Load model
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state_dict)
+    try:
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+
+        # Fix if saved with DataParallel
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("module."):
+                k = k[7:]
+            new_state_dict[k] = v
+
+        model.load_state_dict(new_state_dict, strict=False)
+
+    except Exception:
+        st.error("❌ Model loading failed (wrong format or corrupted file)")
+        st.stop()
 
     model.eval()
     return model
 
 
+# Load model
 model = load_model()
 
 # -----------------------------
-# BETTER TRANSFORM (IMPORTANT)
+# TRANSFORM
 # -----------------------------
 transform = transforms.Compose([
-    transforms.Resize((96, 96)),  # improved from 64
+    transforms.Resize((96, 96)),
     transforms.Grayscale(num_output_channels=3),
     transforms.ToTensor(),
-    transforms.Normalize(
-        [0.485, 0.456, 0.406],   # ImageNet mean
-        [0.229, 0.224, 0.225]
-    )
+    transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
 # -----------------------------
@@ -69,27 +87,54 @@ face_cascade = cv2.CascadeClassifier(
 )
 
 # -----------------------------
-# PREPROCESS FACE (ENHANCED)
+# GRAD-CAM
 # -----------------------------
-def preprocess_face(face):
+def generate_gradcam(model, image_tensor, target_class):
 
-    # Resize
-    face = cv2.resize(face, (96, 96))
+    gradients = []
+    activations = []
 
-    # Sharpen image (improves features)
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5,-1],
-                       [0, -1, 0]])
-    face = cv2.filter2D(face, -1, kernel)
+    def forward_hook(module, input, output):
+        activations.append(output)
 
-    return face
+    def backward_hook(module, grad_in, grad_out):
+        gradients.append(grad_out[0])
+
+    layer = model.layer4[-1].conv2
+    layer.register_forward_hook(forward_hook)
+    layer.register_full_backward_hook(backward_hook)
+
+    output = model(image_tensor)
+    loss = output[0, target_class]
+
+    model.zero_grad()
+    loss.backward()
+
+    grads = gradients[0].cpu().detach().numpy()[0]
+    acts = activations[0].cpu().detach().numpy()[0]
+
+    weights = np.mean(grads, axis=(1, 2))
+    cam = np.zeros(acts.shape[1:], dtype=np.float32)
+
+    for i, w in enumerate(weights):
+        cam += w * acts[i]
+
+    cam = np.maximum(cam, 0)
+    cam = cv2.resize(cam, (96, 96))
+
+    if cam.max() != 0:
+        cam = cam / cam.max()
+
+    return cam
 
 # -----------------------------
 # PREDICT
 # -----------------------------
-def predict(face, model):
+def predict(face):
 
-    face = preprocess_face(face)
+    global model
+
+    face = cv2.resize(face, (96, 96))
 
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
@@ -99,55 +144,50 @@ def predict(face, model):
         probs = torch.softmax(output, dim=1)
         conf, pred = torch.max(probs, 1)
 
-    return pred.item(), conf.item()
+    return pred.item(), conf.item(), img_t
 
 # -----------------------------
 # UI
 # -----------------------------
 st.subheader("📷 Upload Image")
 
-file = st.file_uploader("Upload an image", type=["jpg", "png"])
+files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
 
-if file is not None:
+if files:
+    for file in files:
+        st.markdown("---")
 
-    file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, 1)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-    if len(faces) == 0:
-        st.warning("No face detected 😢")
-        st.image(img, channels="BGR")
-    else:
-        for (x, y, w, h) in faces:
+        if len(faces) == 0:
+            st.warning("No face detected 😢")
+            st.image(img, channels="BGR")
+            continue
 
-            # Padding (IMPORTANT for better context)
-            pad = 15
-            x1 = max(0, x - pad)
-            y1 = max(0, y - pad)
-            x2 = min(img.shape[1], x + w + pad)
-            y2 = min(img.shape[0], y + h + pad)
+        for (x,y,w,h) in faces:
+            face = img[y:y+h, x:x+w]
 
-            face = img[y1:y2, x1:x2]
+            pred, conf, img_t = predict(face)
+            emotion = classes[pred]
 
-            pred, conf = predict(face, model)
+            # Grad-CAM
+            cam = generate_gradcam(model, img_t, pred)
+            heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
+            heatmap = cv2.resize(heatmap, (w,h))
 
-            # Confidence filter
-            if conf < 0.4:
-                emotion = "Uncertain"
-            else:
-                emotion = classes[pred]
+            overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
             # Draw box
-            cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
-
-            cv2.putText(img,
-                        f"{emotion} ({conf*100:.1f}%)",
-                        (x, y-10),
+            cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
+            cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
+                        (x,y-10),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (0,255,0),
-                        2)
+                        0.8,(0,255,0),2)
+
+            st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
 
         st.image(img, channels="BGR")
