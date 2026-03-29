@@ -6,7 +6,7 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import gdown
+import requests
 import os
 
 # -----------------------------
@@ -19,14 +19,14 @@ classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
 
 # -----------------------------
-# LOAD MODEL (FINAL FIX)
+# LOAD MODEL (FINAL FIXED)
 # -----------------------------
 @st.cache_resource
 def load_model():
 
     url = "https://drive.google.com/uc?export=download&id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
 
-    # Download manually (no gdown)
+    # Download if not exists
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
             response = requests.get(url)
@@ -35,15 +35,27 @@ def load_model():
 
     st.write("📦 Model size:", os.path.getsize(MODEL_PATH))
 
-    # Load as state_dict (safe)
+    # Load as state_dict (most stable)
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
     state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state_dict, strict=False)
+
+    # Remove 'module.' if present
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            k = k[7:]
+        new_state_dict[k] = v
+
+    model.load_state_dict(new_state_dict, strict=False)
 
     model.eval()
     return model
+
+
+model = load_model()
+
 # -----------------------------
 # TRANSFORM
 # -----------------------------
@@ -105,7 +117,7 @@ def generate_gradcam(model, image_tensor, target_class):
 # -----------------------------
 # PREDICTION
 # -----------------------------
-def predict(face):
+def predict(face, model):
 
     face = cv2.resize(face, (96, 96))
 
@@ -144,15 +156,17 @@ if files:
         for (x,y,w,h) in faces:
             face = img[y:y+h, x:x+w]
 
-            pred, conf, img_t = predict(face)
+            pred, conf, img_t = predict(face, model)
             emotion = classes[pred]
 
+            # Grad-CAM
             cam = generate_gradcam(model, img_t, pred)
             heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
             heatmap = cv2.resize(heatmap, (w,h))
 
             overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
+            # Draw bounding box
             cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
             cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
                         (x,y-10),
