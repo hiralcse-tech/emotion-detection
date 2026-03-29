@@ -14,7 +14,7 @@ import requests
 # CONFIG
 # -----------------------------
 st.set_page_config(page_title="Emotion Detection", layout="centered")
-st.title("😊 Emotion Detection System (Advanced)")
+st.title("😊 Emotion Detection System (Enhanced Accuracy)")
 
 classes = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 MODEL_PATH = "emotion_model.pth"
@@ -36,7 +36,7 @@ def load_model():
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
-    # ✅ Load weights as state_dict only (fixes _pickle.UnpicklingError)
+    # Load state_dict only (fixes _pickle error)
     state_dict = torch.load(MODEL_PATH, map_location="cpu")
     model.load_state_dict(state_dict)
     st.success("✅ Model loaded successfully")
@@ -51,8 +51,7 @@ model = load_model()
 # TRANSFORM
 # -----------------------------
 transform = transforms.Compose([
-    transforms.Resize((96, 96)),
-    transforms.Grayscale(num_output_channels=3),
+    transforms.Resize((224, 224)),  # larger for better accuracy
     transforms.ToTensor(),
     transforms.Normalize(
         [0.485, 0.456, 0.406],
@@ -71,11 +70,9 @@ face_cascade = cv2.CascadeClassifier(
 # PREPROCESS FACE
 # -----------------------------
 def preprocess_face(face):
-    face = cv2.resize(face, (96, 96))
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5,-1],
-                       [0, -1, 0]])
-    face = cv2.filter2D(face, -1, kernel)
+    # Resize to 224x224 RGB
+    face = cv2.resize(face, (224, 224))
+    face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
     return face
 
 # -----------------------------
