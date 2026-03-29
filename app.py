@@ -24,32 +24,26 @@ MODEL_PATH = "emotion_model.pth"
 @st.cache_resource
 def load_model():
 
-    url = "https://drive.google.com/uc?id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
+    url = "https://drive.google.com/uc?export=download&id=1wYbI3OxE0yktvwArreqN0PedlALKE8ru"
 
+    # Download manually (no gdown)
     if not os.path.exists(MODEL_PATH):
-        gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
+        with st.spinner("Downloading model..."):
+            response = requests.get(url)
+            with open(MODEL_PATH, "wb") as f:
+                f.write(response.content)
 
     st.write("📦 Model size:", os.path.getsize(MODEL_PATH))
 
-    # 🔥 Always load as STATE_DICT (most stable method)
+    # Load as state_dict (safe)
     model = resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 6)
 
     state_dict = torch.load(MODEL_PATH, map_location="cpu")
-
-    # 🔥 Fix if saved with 'module.' (DataParallel issue)
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("module."):
-            k = k[7:]
-        new_state_dict[k] = v
-
-    model.load_state_dict(new_state_dict, strict=False)
+    model.load_state_dict(state_dict, strict=False)
 
     model.eval()
-    return model
-
-model = load_model()
+    return model)
 
 # -----------------------------
 # TRANSFORM
