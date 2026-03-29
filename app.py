@@ -89,6 +89,7 @@ def preprocess_face(face):
 def predict(face, model):
 
     face = preprocess_face(face)
+
     img = Image.fromarray(face)
     img_t = transform(img).unsqueeze(0)
 
