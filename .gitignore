@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+emotion_model.pth
+.pythonlibs/
+.DS_Store
+*.pyc
+*.pth
