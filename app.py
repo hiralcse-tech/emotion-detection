@@ -6,7 +6,6 @@ from torchvision.models import resnet18
 from PIL import Image
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 
 # -----------------------------
 # CONFIG
@@ -106,22 +105,18 @@ mode = st.radio("Choose Mode", ["📷 Upload Image", "🎥 Webcam"])
 # 📷 IMAGE MODE
 # -----------------------------
 if mode == "📷 Upload Image":
-
     files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
 
     if files:
         for file in files:
             st.markdown("---")
-
             file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
             img = cv2.imdecode(file_bytes, 1)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
             for (x,y,w,h) in faces:
                 face = img[y:y+h, x:x+w]
-
                 pred, conf, img_t = predict(face)
                 emotion = classes[pred]
 
@@ -131,48 +126,69 @@ if mode == "📷 Upload Image":
                 heatmap = cv2.resize(heatmap, (w,h))
                 overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
 
-                # Draw box
                 cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
                 cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
-                            (x,y-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,(0,255,0),2)
+                            (x,y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8,(0,255,0),2)
 
                 st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
-
             st.image(img, channels="BGR")
 
 # -----------------------------
-# 🎥 WEBCAM MODE
+# 🎥 WEBCAM MODE (FIXED)
 # -----------------------------
 elif mode == "🎥 Webcam":
-
-    run = st.checkbox("Start Webcam")
-
-    cap = cv2.VideoCapture(0)
-    frame_window = st.image([])
-
-    while run:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Camera error")
-            break
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    st.warning("⚠️ Note: Webcam works best on local machine. For cloud deployment, use image upload.")
+    
+    # Webcam input using Streamlit's native camera input
+    camera_image = st.camera_input("Take a photo")
+    
+    if camera_image is not None:
+        # Convert camera input to image
+        bytes_data = camera_image.getvalue()
+        img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.COLOR_RGB2BGR)
+        
+        # Convert to grayscale for face detection
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Detect faces
         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        
+        if len(faces) == 0:
+            st.warning("No face detected. Please try again with better lighting.")
+            st.image(img, channels="BGR")
+        else:
+            for (x, y, w, h) in faces:
+                face = img[y:y+h, x:x+w]
+                pred, conf, img_t = predict(face)
+                emotion = classes[pred]
+                
+                # Grad-CAM
+                cam = generate_gradcam(model, img_t, pred)
+                heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
+                heatmap = cv2.resize(heatmap, (w, h))
+                overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
+                
+                # Draw rectangle and label
+                cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(img, f"{emotion} ({conf*100:.1f}%)",
+                            (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                # Display results
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(overlay, caption="🔥 Grad-CAM", channels="BGR")
+                with col2:
+                    st.metric("Emotion", emotion.title())
+                    st.metric("Confidence", f"{conf*100:.1f}%")
+            
+            st.image(img, channels="BGR", caption="Captured Image")
 
-        for (x,y,w,h) in faces:
-            face = frame[y:y+h, x:x+w]
-
-            pred, conf, _ = predict(face)
-            emotion = classes[pred]
-
-            cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
-            cv2.putText(frame, f"{emotion} ({conf*100:.1f}%)",
-                        (x,y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,(0,255,0),2)
-
-        frame_window.image(frame, channels="BGR")
-
-    cap.release()
+# -----------------------------
+# REAL-TIME WEBCAM (Advanced - for local use only)
+# -----------------------------
+with st.expander("🎥 Advanced: Real-time Webcam (Local Machine Only)"):
+    st.markdown("""
+    **For real-time webcam streaming, run this app locally:**
+    
+    ```bash
+    streamlit run app.py
