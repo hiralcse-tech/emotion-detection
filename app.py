@@ -28,24 +28,34 @@ def load_model():
 
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Downloading model..."):
-            r = requests.get(url)
-            with open(MODEL_PATH, "wb") as f:
-                f.write(r.content)
+            try:
+                r = requests.get(url, timeout=30)
+                r.raise_for_status()
+                with open(MODEL_PATH, "wb") as f:
+                    f.write(r.content)
+                st.success("Model downloaded successfully!")
+            except Exception as e:
+                st.error(f"Failed to download model: {e}")
+                return None
 
-    model = resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, 6)
+    try:
+        model = resnet18(weights=None)
+        model.fc = nn.Linear(model.fc.in_features, 6)
 
-    # Load state_dict
-    state_dict = torch.load(MODEL_PATH, map_location="cpu")
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("module."):
-            k = k[7:]
-        new_state_dict[k] = v
-    model.load_state_dict(new_state_dict, strict=False)
+        # Load state_dict
+        state_dict = torch.load(MODEL_PATH, map_location="cpu")
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("module."):
+                k = k[7:]
+            new_state_dict[k] = v
+        model.load_state_dict(new_state_dict, strict=False)
 
-    model.eval()
-    return model
+        model.eval()
+        return model
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        return None
 
 model = load_model()
 
@@ -62,26 +72,29 @@ transform = transforms.Compose([
 # FACE DETECTOR + ALIGNMENT
 # -----------------------------
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-mp_face_mesh = mp.solutions.face_mesh
 
 def align_face(image, box):
     x, y, w, h = box
     face = image[y:y+h, x:x+w]
     img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    with mp_face_mesh.FaceMesh(static_image_mode=True) as face_mesh:
-        results = face_mesh.process(img_rgb)
-        if results.multi_face_landmarks:
-            lm = results.multi_face_landmarks[0].landmark
-            left_eye = lm[33]
-            right_eye = lm[263]
-            dy = right_eye.y - left_eye.y
-            dx = right_eye.x - left_eye.x
-            angle = np.arctan2(dy, dx) * 180 / np.pi
-            center = (x + w//2, y + h//2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
-            face = aligned[y:y+h, x:x+w]
+    
+    try:
+        with mp.solutions.face_mesh.FaceMesh(static_image_mode=True) as face_mesh:
+            results = face_mesh.process(img_rgb)
+            if results.multi_face_landmarks:
+                lm = results.multi_face_landmarks[0].landmark
+                left_eye = lm[33]
+                right_eye = lm[263]
+                dy = right_eye.y - left_eye.y
+                dx = right_eye.x - left_eye.x
+                angle = np.arctan2(dy, dx) * 180 / np.pi
+                center = (x + w//2, y + h//2)
+                M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                aligned = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+                face = aligned[y:y+h, x:x+w]
+    except Exception as e:
+        st.warning(f"Face alignment failed: {e}")
+    
     return face
 
 # -----------------------------
@@ -125,7 +138,7 @@ def generate_gradcam(model, image_tensor, target_class, face_size):
         cam += w*acts[i]
     cam = np.maximum(cam,0)
     cam = cv2.resize(cam, face_size)
-    if cam.max() !=0:
+    if cam.max() != 0:
         cam = cam/cam.max()
     return cam
 
@@ -135,33 +148,75 @@ def generate_gradcam(model, image_tensor, target_class, face_size):
 st.subheader("📷 Upload Images")
 files = st.file_uploader("Upload Images", type=["jpg","png"], accept_multiple_files=True)
 
+if model is None:
+    st.error("Model failed to load. Please check your internet connection and try again.")
+    st.stop()
+
 if files:
     for file in files:
         st.markdown("---")
         file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, 1)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray,1.3,5)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-        if len(faces)==0:
+        if len(faces) == 0:
             st.warning("No face detected 😢")
-            st.image(img, channels="BGR")
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(img, channels="BGR", caption="Uploaded Image")
             continue
 
-        for i,(x,y,w,h) in enumerate(faces):
-            face = align_face(img,(x,y,w,h))
+        # Create columns for display
+        cols = st.columns(min(len(faces), 3))
+        
+        for i, (x, y, w, h) in enumerate(faces):
+            face = align_face(img, (x, y, w, h))
             pred, conf, img_t = predict(face)
             emotion = classes[pred]
 
             # Grad-CAM
-            cam = generate_gradcam(model, img_t, pred, (w,h))
-            heatmap = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
-            overlay = cv2.addWeighted(face, 0.6, heatmap,0.4,0)
+            cam = generate_gradcam(model, img_t, pred, (w, h))
+            heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+            
+            # Resize face to match heatmap
+            face_resized = cv2.resize(face, (w, h))
+            overlay = cv2.addWeighted(face_resized, 0.6, heatmap, 0.4, 0)
 
-            # Draw box + label
-            cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
-            cv2.putText(img,f"{emotion} ({conf*100:.1f}%)",(x,y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,0),2)
+            # Draw box + label on original image
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(img, f"{emotion} ({conf*100:.1f}%)", (x, y-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-            st.image(overlay, caption=f"🔥 Grad-CAM Face {i+1}", channels="BGR")
-        st.image(img, channels="BGR")
+            # Display in column
+            with cols[i % len(cols)]:
+                st.image(overlay, caption=f"🔥 Face {i+1}: {emotion}", channels="BGR")
+        
+        # Show full image with bounding boxes
+        st.image(img, channels="BGR", caption="Detected Faces")
+
+# Add sidebar with info
+with st.sidebar:
+    st.markdown("## 📊 About")
+    st.markdown("""
+    This app detects emotions from faces using:
+    - **ResNet18** for emotion classification
+    - **Grad-CAM** for explainable AI
+    - **MediaPipe** for face alignment
+    
+    ### Emotions detected:
+    - 😠 Angry
+    - 😨 Fear
+    - 😊 Happy
+    - 😐 Neutral
+    - 😢 Sad
+    - 😲 Surprise
+    """)
+    
+    st.markdown("---")
+    st.markdown("### 💡 Tips")
+    st.markdown("""
+    - Upload clear face images
+    - Good lighting helps detection
+    - Face should be visible and upright
+    """)
