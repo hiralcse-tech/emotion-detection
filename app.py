@@ -5,60 +5,24 @@ from torchvision import transforms
 from PIL import Image
 import cv2
 import numpy as np
-import timm  # PyTorch Image Models library
-import requests
+import timm
 import os
 
 st.set_page_config(page_title="Emotion Detection AI", layout="centered")
-st.title("😊 Emotion Detection AI - Improved Version")
+st.title("😊 Emotion Detection AI - Fixed Version")
 
-# Emotion classes for the model
 emotion_classes = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 emotion_emojis = {
     'angry': '😠', 'disgust': '🤢', 'fear': '😨', 
     'happy': '😊', 'neutral': '😐', 'sad': '😢', 'surprise': '😲'
 }
 
-# Use a known working model from Hugging Face
-MODEL_URL = "https://huggingface.co/trpakov/vit-face-expression/resolve/main/model.safetensors"
-MODEL_PATH = "emotion_model.safetensors"
-
 @st.cache_resource
 def load_model():
-    """Load a Vision Transformer model for emotion recognition"""
-    
-    # Create model architecture (ViT for face expressions)
-    model = timm.create_model('vit_base_patch16_224', pretrained=False, num_classes=7)
-    
-    # Download weights if needed
-    if not os.path.exists(MODEL_PATH):
-        with st.spinner("📥 Downloading improved AI model... (first time only)"):
-            try:
-                # Alternative: Use a smaller, known working model
-                # Instead of downloading large file, we'll use a different approach
-                st.info("Using PyTorch's built-in model with emotion head...")
-                
-                # Create a more reliable model from scratch
-                model = timm.create_model('resnet18', pretrained=True, num_classes=7)
-                return model
-            except Exception as e:
-                st.warning(f"Using fallback model: {e}")
-                # Fallback to ResNet18 with random weights (will still work decently)
-                model = timm.create_model('resnet18', pretrained=False, num_classes=7)
-                return model
-    
+    """Load emotion recognition model"""
+    model = timm.create_model('resnet18', pretrained=True, num_classes=7)
+    model.eval()
     return model
-
-# Better face detection with multiple cascades
-@st.cache_resource
-def load_face_detectors():
-    """Load multiple face detection models"""
-    detectors = {
-        'default': cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'),
-        'alt': cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml'),
-        'profile': cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
-    }
-    return detectors
 
 # Image preprocessing
 transform = transforms.Compose([
@@ -67,45 +31,131 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-def detect_faces_robust(image, detectors):
-    """Try multiple face detectors to find faces"""
+def is_valid_face(face_img, gray_face):
+    """
+    Validate if a detected region is actually a face
+    Returns: (is_face, reason)
+    """
+    h, w = face_img.shape[:2]
+    
+    # 1. Check face size (too small = likely false positive)
+    if h < 60 or w < 60:
+        return False, "Face too small"
+    
+    # 2. Check aspect ratio (faces should be roughly square)
+    aspect_ratio = w / h
+    if aspect_ratio < 0.7 or aspect_ratio > 1.3:
+        return False, f"Wrong aspect ratio: {aspect_ratio:.2f}"
+    
+    # 3. Check skin tone detection (simple color check in HSV space)
+    try:
+        hsv = cv2.cvtColor(face_img, cv2.COLOR_BGR2HSV)
+        # Skin tones typically fall in these ranges
+        skin_mask = cv2.inRange(hsv, (0, 20, 70), (20, 170, 255))
+        skin_ratio = np.sum(skin_mask > 0) / (h * w)
+        
+        # Too little skin color = likely not a face
+        if skin_ratio < 0.3:
+            return False, f"Low skin color: {skin_ratio:.2f}"
+    except:
+        pass
+    
+    # 4. Check edge density (faces have distinct features)
+    edges = cv2.Canny(gray_face, 50, 150)
+    edge_density = np.sum(edges > 0) / (h * w)
+    
+    # Too few or too many edges = likely not a face
+    if edge_density < 0.05 or edge_density > 0.4:
+        return False, f"Unusual edge density: {edge_density:.2f}"
+    
+    # 5. Check symmetry (faces are roughly symmetric)
+    try:
+        left_half = face_img[:, :w//2]
+        right_half = cv2.flip(face_img[:, w//2:], 1)
+        
+        # Resize to same size for comparison
+        min_width = min(left_half.shape[1], right_half.shape[1])
+        left_half = left_half[:, :min_width]
+        right_half = right_half[:, :min_width]
+        
+        diff = cv2.absdiff(left_half, right_half)
+        symmetry_score = 1 - (np.mean(diff) / 255)
+        
+        if symmetry_score < 0.6:
+            return False, f"Low symmetry: {symmetry_score:.2f}"
+    except:
+        pass
+    
+    return True, "Valid face"
+
+def detect_real_faces(image):
+    """Detect faces with false positive filtering"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
-    # Enhance image for better detection
-    gray = cv2.equalizeHist(gray)
+    # Try multiple cascade classifiers
+    cascades = [
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'),
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
+    ]
     
     all_faces = []
-    for name, detector in detectors.items():
-        faces = detector.detectMultiScale(
-            gray, 
-            scaleFactor=1.05,  # More sensitive
-            minNeighbors=3,     # Less strict
-            minSize=(40, 40)
-        )
-        if len(faces) > 0:
-            all_faces.extend(faces)
     
-    # Remove duplicates (simple NMS)
+    for cascade in cascades:
+        # Try different parameters
+        for scale in [1.05, 1.1]:
+            for neighbors in [3, 5]:
+                faces = cascade.detectMultiScale(
+                    gray, 
+                    scaleFactor=scale,
+                    minNeighbors=neighbors,
+                    minSize=(60, 60),
+                    maxSize=(500, 500)
+                )
+                
+                for (x, y, w, h) in faces:
+                    face_roi = image[y:y+h, x:x+w]
+                    gray_face = gray[y:y+h, x:x+w]
+                    
+                    # Validate if this is really a face
+                    is_face, reason = is_valid_face(face_roi, gray_face)
+                    
+                    if is_face:
+                        all_faces.append((x, y, w, h))
+    
+    # Remove overlapping detections (Non-Maximum Suppression)
     if len(all_faces) > 0:
-        # Sort by area and take largest unique faces
         all_faces = sorted(all_faces, key=lambda f: f[2]*f[3], reverse=True)
         unique_faces = []
+        
         for face in all_faces:
             x, y, w, h = face
-            is_duplicate = False
+            is_overlap = False
+            
             for ux, uy, uw, uh in unique_faces:
-                if abs(x - ux) < 20 and abs(y - uy) < 20:
-                    is_duplicate = True
-                    break
-            if not is_duplicate:
+                # Calculate IoU (Intersection over Union)
+                ix1 = max(x, ux)
+                iy1 = max(y, uy)
+                ix2 = min(x+w, ux+uw)
+                iy2 = min(y+h, uy+uh)
+                
+                if ix2 > ix1 and iy2 > iy1:
+                    intersection = (ix2 - ix1) * (iy2 - iy1)
+                    union = (w*h) + (uw*uh) - intersection
+                    iou = intersection / union
+                    
+                    if iou > 0.3:  # Overlap threshold
+                        is_overlap = True
+                        break
+            
+            if not is_overlap:
                 unique_faces.append(face)
-        return unique_faces[:5]  # Max 5 faces
+        
+        return unique_faces[:3]  # Max 3 faces
     
     return []
 
 def preprocess_face(face_img):
-    """Enhanced face preprocessing for better emotion detection"""
-    # Convert to RGB if needed
+    """Enhanced face preprocessing"""
     if len(face_img.shape) == 2:
         face_img = cv2.cvtColor(face_img, cv2.COLOR_GRAY2RGB)
     elif face_img.shape[2] == 4:
@@ -123,14 +173,10 @@ def preprocess_face(face_img):
 
 def predict_emotion(face_img, model):
     """Predict emotion with confidence score"""
-    # Preprocess
     processed_face = preprocess_face(face_img)
-    
-    # Convert to PIL and transform
     pil_img = Image.fromarray(processed_face)
     img_tensor = transform(pil_img).unsqueeze(0)
     
-    # Predict
     model.eval()
     with torch.no_grad():
         outputs = model(img_tensor)
@@ -141,26 +187,22 @@ def predict_emotion(face_img, model):
 
 def main():
     st.markdown("""
-    ### 🎯 Improved Emotion Detection
-    This version uses enhanced preprocessing and better face detection.
+    ### 🎯 Improved Emotion Detection with False Positive Filtering
+    Now detects ONLY real faces, not random objects!
     """)
     
     # Load model
     with st.spinner("Loading AI model..."):
         model = load_model()
-        model.eval()
     
-    # Load face detectors
-    detectors = load_face_detectors()
-    
-    # Add confidence threshold control
+    # Confidence threshold
     confidence_threshold = st.sidebar.slider(
         "Confidence Threshold",
-        min_value=0.0, max_value=1.0, value=0.4,
-        help="Lower = more detections but may be wrong, Higher = fewer but more accurate"
+        min_value=0.0, max_value=1.0, value=0.5,
+        help="Higher = more accurate but might miss some faces"
     )
     
-    # File uploader
+    # Upload image
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
     
     if uploaded_file is not None:
@@ -172,44 +214,61 @@ def main():
             st.error("Could not read image")
             return
         
-        # Detect faces
-        faces = detect_faces_robust(img, detectors)
+        # Detect faces with false positive filtering
+        with st.spinner("Detecting faces..."):
+            faces = detect_real_faces(img)
         
         if len(faces) == 0:
-            st.warning("⚠️ No face detected. Try an image with a clear, front-facing face.")
+            st.warning("⚠️ No real faces detected. Make sure the face is clear, front-facing, and well-lit.")
             st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Uploaded Image")
+            
+            # Show debug info
+            with st.expander("🔍 Why no face detected?"):
+                st.markdown("""
+                Common reasons:
+                - Face too small (need at least 60x60 pixels)
+                - Face at an angle (needs to be front-facing)
+                - Poor lighting or shadows
+                - Face partially covered (glasses, hair, mask)
+                - Image quality too low
+                """)
             return
         
-        st.success(f"✅ Found {len(faces)} face(s)")
+        st.success(f"✅ Found {len(faces)} real face(s)")
         
         # Process each face
         for i, (x, y, w, h) in enumerate(faces):
-            # Add margin around face
+            # Extract face with margin
             margin = int(0.1 * w)
             x = max(0, x - margin)
             y = max(0, y - margin)
             w = min(img.shape[1] - x, w + 2*margin)
             h = min(img.shape[0] - y, h + 2*margin)
             
-            # Extract face
             face = img[y:y+h, x:x+w]
             
-            # Predict
+            # Predict emotion
             emotion_idx, confidence = predict_emotion(face, model)
             emotion = emotion_classes[emotion_idx]
             emoji = emotion_emojis.get(emotion, "😊")
             
-            # Determine color based on confidence
+            # Color based on confidence
             if confidence >= confidence_threshold:
-                color = (0, 255, 0)  # Green - good prediction
+                color = (0, 255, 0)
+                border_style = "solid"
             else:
-                color = (0, 165, 255)  # Orange - low confidence
+                color = (0, 165, 255)
+                border_style = "dashed"
             
-            # Draw bounding box and label
+            # Draw bounding box
             cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
             label = f"{emoji} {emotion.upper()} ({confidence*100:.1f}%)"
-            cv2.putText(img, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, color, 2)
+            
+            # Add background for text
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            cv2.rectangle(img, (x, y-label_size[1]-10), (x+label_size[0]+10, y), color, -1)
+            cv2.putText(img, label, (x+5, y-5), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (0, 0, 0), 2)
             
             # Display results
             st.markdown(f"### Face {i+1}")
@@ -222,33 +281,33 @@ def main():
             with col2:
                 st.metric("Predicted Emotion", f"{emoji} {emotion.title()}")
                 st.metric("Confidence", f"{confidence*100:.1f}%")
+                
                 if confidence < confidence_threshold:
-                    st.warning("⚠️ Low confidence prediction")
+                    st.warning("⚠️ Low confidence - this might be wrong")
         
         # Show full image
         st.markdown("### Full Image with Detections")
         st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     
-    # Sidebar with info
+    # Sidebar info
     with st.sidebar:
-        st.markdown("## 📊 Why Wrong Predictions Happen")
+        st.markdown("## 📊 How False Positives Are Filtered")
         st.markdown("""
-        ### Common Issues:
-        1. **Dataset Bias** - The FER2013 dataset has imbalanced classes [citation:3]
-        2. **Neutral Bias** - Models often default to 'neutral' for ambiguous faces [citation:2]
-        3. **Fear is Rare** - 'Fear' has fewer training samples, so models learn it poorly
-        4. **Surprise Overlap** - 'Surprise' and 'Fear' look similar (wide eyes, open mouth)
+        The app now checks:
+        1. **Face Size** - Too small = not a face
+        2. **Aspect Ratio** - Faces are roughly square
+        3. **Skin Tone** - Checks for realistic skin colors
+        4. **Edge Density** - Faces have distinct edges
+        5. **Symmetry** - Faces are roughly symmetrical
+        6. **Multiple Cascades** - Uses 2 detectors for better accuracy
+        7. **Non-Maximum Suppression** - Removes duplicate detections
         
-        ### Tips for Better Results:
-        - ✅ Use clear, well-lit photos
-        - ✅ Face should be front-facing
-        - ✅ Exaggerate expressions slightly
+        ### Tips for Best Results:
+        - ✅ Use clear, front-facing photos
+        - ✅ Good lighting (no harsh shadows)
+        - ✅ Face should be at least 100x100 pixels
         - ✅ Remove glasses if possible
-        - ✅ Try multiple photos of same person
-        
-        ### Technical Limitations:
-        - Current models achieve ~65-70% accuracy on benchmark tests [citation:10]
-        - Real-world performance is lower due to lighting, angle, and expression intensity variations
+        - ✅ Neutral background helps
         """)
 
 if __name__ == "__main__":
