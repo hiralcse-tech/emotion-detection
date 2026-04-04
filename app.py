@@ -20,23 +20,28 @@ st.set_page_config(
 )
 
 # -----------------------------
-# CONSTANTS
+# CONSTANTS - UPDATE THESE TO MATCH YOUR MODEL
 # -----------------------------
-# Standard FER2013 classes (most common)
+# Change these values based on how your model was trained
+INPUT_SIZE = 48  # Try: 48, 96, or 224
+USE_GRAYSCALE = True
+NORMALIZE_MEAN = [0.5]  # Usually [0.5] for normalized images
+NORMALIZE_STD = [0.5]   # Usually [0.5] for normalized images
+
+# FER2013 Standard Classes (most common)
 CLASSES = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+
 EMOJI_MAP = {
-    'angry': '😠', 'disgust': '🤢', 'fear': '😨',
-    'happy': '😊', 'neutral': '😐', 'sad': '😢', 'surprise': '😲'
+    'angry': '😠', 
+    'disgust': '🤢', 
+    'fear': '😨',
+    'happy': '😊', 
+    'neutral': '😐', 
+    'sad': '😢', 
+    'surprise': '😲'
 }
 
-# Fixed preprocessing - MATCH YOUR MODEL'S TRAINING
-# CHANGE THESE VALUES based on how you trained your model
-INPUT_SIZE = 48  # Change to 96, 224, etc. if your model uses different size
-USE_GRAYSCALE = True
-NORMALIZE_MEAN = [0.5]  # Change based on your training
-NORMALIZE_STD = [0.5]   # Change based on your training
-
-# Create transform
+# Create transform based on settings
 if USE_GRAYSCALE:
     transform = transforms.Compose([
         transforms.Resize((INPUT_SIZE, INPUT_SIZE)),
@@ -97,10 +102,6 @@ def load_model(model_path):
         if 'fc.weight' in state_dict:
             num_classes = state_dict['fc.weight'].shape[0]
             st.sidebar.info(f"Model has {num_classes} output classes")
-            
-            # Update CLASSES if needed
-            if num_classes != len(CLASSES):
-                st.sidebar.warning(f"Model expects {num_classes} classes, but app has {len(CLASSES)}")
         
         # Create model
         model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
@@ -314,20 +315,39 @@ def main():
                 st.image(cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB), caption="Detection Result")
     
     with tab2:
+        st.markdown("## How to Fix Wrong Predictions")
         st.markdown("""
-        ## How to Fix Wrong Predictions
-        
         If the model is predicting wrong emotions, you need to **match the preprocessing** used during training.
         
         ### Steps to fix:
         
-        1. **Find out how your model was trained:**
-           - What image size? (48x48, 96x96, 224x224?)
-           - Were images normalized? What mean/std values?
-           - Was it grayscale or RGB?
+        1. **Find out how your model was trained**
+        2. **Update the constants at the top of app.py**
+        3. **Redeploy the app**
         
-        2. **Update the constants at the top of app.py:**
-           ```python
-           INPUT_SIZE = 48  # Change this
-           NORMALIZE_MEAN = [0.5]  # Change this
-           NORMALIZE_STD = [0.5]   # Change this
+        ### Current Configuration:
+        """)
+        st.code(f"""
+INPUT_SIZE = {INPUT_SIZE}
+USE_GRAYSCALE = {USE_GRAYSCALE}
+NORMALIZE_MEAN = {NORMALIZE_MEAN}
+NORMALIZE_STD = {NORMALIZE_STD}
+CLASSES = {CLASSES}
+        """)
+        
+        st.markdown("""
+        ### Common Configurations:
+        
+        - **FER2013 dataset:** INPUT_SIZE=48, grayscale=True, mean=[0.5], std=[0.5]
+        - **CK+ dataset:** INPUT_SIZE=48 or 96, grayscale=True, mean=[0.5], std=[0.5]
+        - **AffectNet:** INPUT_SIZE=224, grayscale=False, ImageNet normalization
+        
+        ### Need help?
+        Tell me how your model was trained and I'll give you the correct settings.
+        """)
+
+# -----------------------------
+# RUN
+# -----------------------------
+if __name__ == "__main__":
+    main()
