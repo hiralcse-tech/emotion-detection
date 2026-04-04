@@ -7,8 +7,8 @@ from PIL import Image
 import cv2
 import numpy as np
 import os
-from pathlib import Path
 import time
+import requests
 
 # -----------------------------
 # PAGE CONFIGURATION
@@ -41,6 +41,12 @@ COLORS = {
     'surprise': (0, 255, 255)  # Yellow
 }
 
+# Hugging Face model info
+HF_USERNAME = "hiral20"
+HF_MODEL_NAME = "emotion-model"
+HF_MODEL_FILE = "emotion_model.pth"
+HUGGINGFACE_URL = f"https://huggingface.co/{HF_USERNAME}/{HF_MODEL_NAME}/resolve/main/{HF_MODEL_FILE}"
+
 # -----------------------------
 # SIDEBAR
 # -----------------------------
@@ -56,12 +62,10 @@ with st.sidebar:
     for emotion, emoji in EMOJI_MAP.items():
         st.write(f"{emoji} {emotion.capitalize()}")
     st.markdown("---")
-    st.markdown("### How it works")
-    st.markdown(
-        "1. **Face Detection**: Haar Cascade Classifier\n"
-        "2. **Emotion Recognition**: ResNet18 Neural Network\n"
-        "3. **Explainability**: Grad-CAM heatmaps"
-    )
+    st.markdown("### Model Info")
+    st.markdown(f"**Source:** Hugging Face")
+    st.markdown(f"**Repo:** `{HF_USERNAME}/{HF_MODEL_NAME}`")
+    st.markdown(f"**File:** `{HF_MODEL_FILE}`")
     st.markdown("---")
     st.markdown("Made with ❤️ using Streamlit")
 
@@ -75,7 +79,7 @@ with col2:
 st.markdown("---")
 
 # -----------------------------
-# MODEL LOADING (WITHOUT WIDGETS IN CACHED FUNCTION)
+# MODEL LOADING
 # -----------------------------
 @st.cache_resource
 def load_model(model_path):
@@ -98,20 +102,18 @@ def load_model(model_path):
         st.error(f"Error loading model: {str(e)}")
         return None
 
-# -----------------------------
-# DOWNLOAD MODEL FROM URL
-# -----------------------------
-def download_model_from_url(url, model_path):
-    """Download model from URL with progress bar"""
+def download_model_from_huggingface(model_path):
+    """Download model from Hugging Face with progress bar"""
     try:
-        import requests
+        st.info(f"📥 Downloading model from Hugging Face...")
+        st.code(f"Source: {HUGGINGFACE_URL}")
         
         # Add headers to mimic browser
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        response = requests.get(url, stream=True, headers=headers)
+        response = requests.get(HUGGINGFACE_URL, stream=True, headers=headers)
         response.raise_for_status()
         
         # Get file size
@@ -146,63 +148,52 @@ def download_model_from_url(url, model_path):
             return True
         else:
             st.error("Downloaded file is empty or corrupt")
-            if os.path.exists(model_path):
-                os.remove(model_path)
             return False
         
     except requests.exceptions.RequestException as e:
         st.error(f"Download failed: {str(e)}")
+        st.info("""
+        **Troubleshooting tips:**
+        - Make sure the repository is public
+        - Check if the file exists at the specified path
+        - Try the alternative URL below
+        """)
         return False
 
 # -----------------------------
-# MODEL FILE HANDLER (Widgets outside cached function)
+# MODEL FILE HANDLER
 # -----------------------------
 def handle_model_loading():
-    """Handle model file upload or download from Hugging Face"""
+    """Handle model file download from Hugging Face"""
     model_path = "emotion_model.pth"
     
-    if not os.path.exists(model_path):
-        st.warning("⚠️ Model file not found!")
-        
-        # Hugging Face specific section
-        st.markdown("### 🤗 Download from Hugging Face")
-        st.info("**Repository:** hiral20/emotion-model\n\n**File:** emotion_model.pth")
-        
-        # Try Hugging Face download
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            huggingface_url = "https://huggingface.co/hiral20/emotion-model/resolve/main/emotion_model.pth"
-            
-            if st.button("📥 Download from Hugging Face", use_container_width=True):
-                with st.spinner("Downloading model from Hugging Face..."):
-                    success = download_model_from_url(huggingface_url, model_path)
-                    if success:
-                        st.rerun()
-        
-        with col2:
-            # Alternative URL
-            alt_url = st.text_input(
-                "Or enter alternative URL:",
-                placeholder="https://...",
-                key="manual_url"
-            )
-            
-            if alt_url and st.button("📥 Download from URL", use_container_width=True):
-                with st.spinner("Downloading model..."):
-                    success = download_model_from_url(alt_url, model_path)
-                    if success:
-                        st.rerun()
-        
-        # File upload option
+    # Check if model already exists
+    if os.path.exists(model_path):
+        # Verify model can be loaded
+        test_model = load_model(model_path)
+        if test_model is not None:
+            return test_model
+        else:
+            st.warning("Existing model file is corrupted. Re-downloading...")
+            os.remove(model_path)
+    
+    # Model doesn't exist or is corrupted, download it
+    st.warning("⚠️ Model file not found. Downloading from Hugging Face...")
+    
+    # Try to download from Hugging Face
+    with st.spinner("Connecting to Hugging Face..."):
+        success = download_model_from_huggingface(model_path)
+    
+    if not success:
+        # Fallback: Manual upload option
         st.markdown("---")
-        st.markdown("### 📁 Or Upload Manually")
-        st.caption("Max file size: 200MB")
+        st.markdown("### 📁 Manual Upload (Alternative)")
+        st.caption("If automatic download fails, you can upload the model file manually")
         
         uploaded_file = st.file_uploader(
             "Upload emotion_model.pth",
             type=['pth', 'pt'],
-            key="file_upload"
+            key="manual_upload"
         )
         
         if uploaded_file is not None:
@@ -214,18 +205,16 @@ def handle_model_loading():
         
         return None
     
-    # Load the model
-    with st.spinner("Loading emotion detection model..."):
-        model = load_model(model_path)
+    # Try to load the downloaded model
+    model = load_model(model_path)
     
     if model is None:
-        st.error("Failed to load model. Please check the model file.")
-        if st.button("🗑️ Delete corrupted model file"):
-            os.remove(model_path)
-            st.rerun()
+        st.error("Failed to load model after download")
         return None
     
-    return model
+    st.success("✅ Model ready! You can now upload images for emotion detection.")
+    time.sleep(1)
+    st.rerun()
 
 # -----------------------------
 # FACE DETECTION
@@ -306,7 +295,6 @@ class GradCAM:
 def get_target_layer(model):
     """Get appropriate target layer for Grad-CAM"""
     try:
-        # Try to get the last convolutional layer of ResNet18
         return model.layer4[-1].conv2
     except AttributeError:
         try:
@@ -364,13 +352,9 @@ def draw_emotion_box(image, x, y, w, h, emotion, confidence):
 
 def create_gradcam_overlay(face_image, cam, alpha=0.5):
     """Create Grad-CAM heatmap overlay"""
-    # Create heatmap
     heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
     heatmap = cv2.resize(heatmap, (face_image.shape[1], face_image.shape[0]))
-    
-    # Overlay
     overlay = cv2.addWeighted(face_image, 1-alpha, heatmap, alpha, 0)
-    
     return overlay
 
 def plot_confidence_chart(probabilities):
@@ -386,7 +370,6 @@ def plot_confidence_chart(probabilities):
     ax.set_title('Emotion Probabilities')
     ax.set_ylim([0, 1])
     
-    # Add value labels on bars
     for bar, prob in zip(bars, probabilities):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -394,7 +377,6 @@ def plot_confidence_chart(probabilities):
     
     plt.xticks(rotation=45)
     plt.tight_layout()
-    
     return fig
 
 # -----------------------------
@@ -404,7 +386,7 @@ def main():
     # Load face cascade
     face_cascade = load_face_cascade()
     
-    # Handle model loading (widgets are here, not in cached function)
+    # Handle model loading (auto-downloads from Hugging Face)
     model = handle_model_loading()
     
     if model is None:
@@ -413,9 +395,7 @@ def main():
     # Create tabs
     tab1, tab2, tab3 = st.tabs(["📷 Image Upload", "🎥 Webcam", "ℹ️ About"])
     
-    # -------------------------
     # TAB 1: IMAGE UPLOAD
-    # -------------------------
     with tab1:
         st.subheader("Upload Images for Emotion Detection")
         
@@ -430,7 +410,6 @@ def main():
                 st.markdown("---")
                 st.subheader(f"Image {idx + 1}: {file.name}")
                 
-                # Read image
                 file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
                 image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
                 
@@ -438,7 +417,6 @@ def main():
                     st.error("Could not read image")
                     continue
                 
-                # Detect faces
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                 
@@ -447,88 +425,64 @@ def main():
                     st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
                     continue
                 
-                # Process each face
                 result_image = image.copy()
                 cols = st.columns(min(len(faces), 3))
                 
                 for i, (x, y, w, h) in enumerate(faces):
                     face = image[y:y+h, x:x+w]
-                    
-                    # Predict emotion
                     pred_idx, confidence, input_tensor, probabilities = predict_emotion(model, face)
                     
                     if pred_idx is not None:
                         emotion = CLASSES[pred_idx]
                         
-                        # Generate Grad-CAM
                         target_layer = get_target_layer(model)
                         gradcam = GradCAM(model, target_layer)
                         cam = gradcam.generate(input_tensor, pred_idx)
                         gradcam.remove_hooks()
                         
-                        # Create overlays
                         overlay = create_gradcam_overlay(face, cam, alpha=0.4)
-                        
-                        # Draw on result image
                         result_image = draw_emotion_box(result_image, x, y, w, h, emotion, confidence)
                         
-                        # Display in columns
                         with cols[i % len(cols)]:
                             st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB),
                                     caption=f"{EMOJI_MAP[emotion]} {emotion.capitalize()} ({confidence*100:.1f}%)",
                                     use_container_width=True)
                 
-                # Show original image with boxes
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-                            caption="Original Image", use_container_width=True)
+                    st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Original Image", use_container_width=True)
                 with col2:
-                    st.image(cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB),
-                            caption="Detected Emotions", use_container_width=True)
+                    st.image(cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB), caption="Detected Emotions", use_container_width=True)
                 
-                # Show confidence chart for first face
                 if len(faces) > 0 and 'probabilities' in locals():
                     st.subheader("Confidence Analysis")
                     fig = plot_confidence_chart(probabilities)
                     st.pyplot(fig)
     
-    # -------------------------
     # TAB 2: WEBCAM
-    # -------------------------
     with tab2:
         st.subheader("Real-time Emotion Detection")
-        st.warning("⚠️ Note: Webcam mode works best when running locally. Streamlit Cloud may have limited webcam support.")
+        st.warning("⚠️ Note: Webcam mode works best when running locally.")
         
         run_webcam = st.checkbox("Start Webcam", key="webcam_checkbox")
         
         if run_webcam:
-            # Try to open webcam
             cap = cv2.VideoCapture(0)
             
             if not cap.isOpened():
-                st.error("Cannot access webcam. Please check:")
-                st.markdown("""
-                - Camera permissions are granted
-                - No other app is using the camera
-                - Camera is properly connected
-                """)
+                st.error("Cannot access webcam.")
             else:
                 frame_placeholder = st.empty()
                 stop_button = st.button("Stop Webcam")
                 
                 while run_webcam and not stop_button:
                     ret, frame = cap.read()
-                    
                     if not ret:
-                        st.error("Failed to capture frame")
                         break
                     
-                    # Detect faces
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                     
-                    # Process faces
                     for (x, y, w, h) in faces:
                         face = frame[y:y+h, x:x+w]
                         pred_idx, confidence, _, _ = predict_emotion(model, face)
@@ -537,7 +491,6 @@ def main():
                             emotion = CLASSES[pred_idx]
                             frame = draw_emotion_box(frame, x, y, w, h, emotion, confidence)
                     
-                    # Display frame
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
                     
@@ -547,48 +500,29 @@ def main():
                 cap.release()
                 st.success("Webcam stopped")
     
-    # -------------------------
     # TAB 3: ABOUT
-    # -------------------------
     with tab3:
-        st.markdown("""
+        st.markdown(f"""
         ## About This Application
         
         ### 🎯 Purpose
-        This application demonstrates how deep learning can be used for emotion recognition while providing explainability through Grad-CAM visualizations.
+        Emotion detection with explainable AI using Grad-CAM.
         
-        ### 🧠 How It Works
-        
-        #### 1. Face Detection
-        - Uses OpenCV's Haar Cascade Classifier
-        - Detects frontal faces in images/video streams
-        
-        #### 2. Emotion Recognition
-        - **Model Architecture**: ResNet18 (pre-trained on ImageNet)
-        - **Fine-tuned**: Modified final layer for 6 emotion classes
-        - **Input Size**: 96x96 pixels
-        - **Classes**: Angry, Fear, Happy, Neutral, Sad, Surprise
-        
-        #### 3. Explainable AI (Grad-CAM)
-        - **Gradient-weighted Class Activation Mapping**
-        - Highlights important regions the model focuses on
-        - Red regions indicate high importance for prediction
-        - Helps understand model decision-making
+        ### 🧠 Model Details
+        - **Architecture**: ResNet18
+        - **Classes**: 6 emotions (angry, fear, happy, neutral, sad, surprise)
+        - **Source**: Hugging Face - `{HF_USERNAME}/{HF_MODEL_NAME}`
+        - **File**: `{HF_MODEL_FILE}`
         
         ### 🔧 Technical Stack
-        - **Frontend**: Streamlit
-        - **Deep Learning**: PyTorch
-        - **Computer Vision**: OpenCV, torchvision
-        - **Visualization**: Matplotlib
+        - Streamlit for UI
+        - PyTorch for deep learning
+        - OpenCV for face detection
+        - Grad-CAM for explainability
         
-        ### 📝 Requirements
-        - Python 3.8+
-        - PyTorch 1.9+
-        - OpenCV
-        - Streamlit
-        
-        ### 🤗 Model Source
-        Model is downloaded from: `hiral20/emotion-model` on Hugging Face
+        ### 📥 Model Download
+        The model is automatically downloaded from:
+        `{HUGGINGFACE_URL}`
         """)
 
 # -----------------------------
