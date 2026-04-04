@@ -76,65 +76,14 @@ with col2:
 st.markdown("---")
 
 # -----------------------------
-# MODEL MANAGEMENT
+# MODEL LOADING (WITHOUT WIDGETS IN CACHED FUNCTION)
 # -----------------------------
-MODEL_URL = "https://github.com/yourusername/emotion-detection/releases/download/v1.0/emotion_model.pth"
-# If you have a direct download link, replace the above URL
-# Otherwise, users need to provide their own model file
-
 @st.cache_resource
-def download_model_from_url(url, save_path):
-    """Download model file from URL"""
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True
-    except Exception as e:
-        st.error(f"Failed to download model: {str(e)}")
-        return False
-
-@st.cache_resource
-def load_model(model_path=None):
+def load_model(model_path):
     """Load the trained emotion detection model"""
-    
-    # If no model path provided, look for local file
-    if model_path is None:
-        model_path = "emotion_model.pth"
-    
-    # Check if model exists
     if not os.path.exists(model_path):
-        st.warning("⚠️ Model file not found!")
-        
-        # Option 1: Allow user to upload model
-        uploaded_file = st.file_uploader(
-            "Upload your trained model file (emotion_model.pth)",
-            type=['pth', 'pt'],
-            help="Upload the PyTorch model file you trained"
-        )
-        
-        if uploaded_file is not None:
-            # Save uploaded file
-            with open(model_path, 'wb') as f:
-                f.write(uploaded_file.getbuffer())
-            st.success("✅ Model uploaded successfully!")
-        else:
-            # Option 2: Try to download from URL (if you have a hosted model)
-            if st.button("📥 Download sample model (if available)"):
-                with st.spinner("Downloading model..."):
-                    if download_model_from_url(MODEL_URL, model_path):
-                        st.success("✅ Model downloaded!")
-                    else:
-                        st.error("Model download failed. Please upload your own model.")
-                        return None
-            else:
-                st.info("Please upload your trained model file to continue.")
-                return None
+        return None
     
-    # Load the model
     try:
         # Create model architecture
         model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
@@ -148,7 +97,6 @@ def load_model(model_path=None):
         return model
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
-        st.info("Make sure the model file matches the ResNet18 architecture with 6 output classes.")
         return None
 
 # -----------------------------
@@ -322,15 +270,64 @@ def plot_confidence_chart(probabilities):
     return fig
 
 # -----------------------------
+# MODEL FILE HANDLER (Widgets outside cached function)
+# -----------------------------
+def handle_model_loading():
+    """Handle model file upload and loading (widgets here, outside cache)"""
+    
+    # Check if model file exists
+    model_path = "emotion_model.pth"
+    
+    if not os.path.exists(model_path):
+        st.warning("⚠️ Model file not found!")
+        
+        # Option 1: Upload model file
+        st.markdown("### Upload Your Model File")
+        uploaded_file = st.file_uploader(
+            "Upload your trained model file (emotion_model.pth)",
+            type=['pth', 'pt'],
+            help="Upload the PyTorch model file you trained"
+        )
+        
+        if uploaded_file is not None:
+            # Save uploaded file
+            with open(model_path, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
+            st.success("✅ Model uploaded successfully! Please refresh or continue.")
+            st.rerun()
+        
+        st.markdown("---")
+        st.info("""
+        **Need a model?** 
+        Train your own model using ResNet18 on a dataset like FER2013 or CK+.
+        The model should have 6 output classes: angry, fear, happy, neutral, sad, surprise.
+        """)
+        
+        return None
+    
+    # Load the model
+    with st.spinner("Loading emotion detection model..."):
+        model = load_model(model_path)
+    
+    if model is None:
+        st.error("Failed to load model. Please check the model file.")
+        # Option to delete corrupted model
+        if st.button("🗑️ Delete corrupted model file"):
+            os.remove(model_path)
+            st.rerun()
+        return None
+    
+    return model
+
+# -----------------------------
 # MAIN APP
 # -----------------------------
 def main():
     # Load face cascade
     face_cascade = load_face_cascade()
     
-    # Load model
-    with st.spinner("Loading emotion detection model..."):
-        model = load_model()
+    # Handle model loading (widgets are here, not in cached function)
+    model = handle_model_loading()
     
     if model is None:
         st.stop()
@@ -413,7 +410,7 @@ def main():
                             caption="Detected Emotions", use_container_width=True)
                 
                 # Show confidence chart for first face
-                if len(faces) > 0:
+                if len(faces) > 0 and 'probabilities' in locals():
                     st.subheader("Confidence Analysis")
                     fig = plot_confidence_chart(probabilities)
                     st.pyplot(fig)
@@ -516,34 +513,7 @@ def main():
         - PyTorch 1.9+
         - OpenCV
         - Streamlit
-        
-        ### 🚀 Deployment
-        This app can be deployed on:
-        - Streamlit Cloud
-        - Hugging Face Spaces
-        - Local server
-        - Docker container
-        
-        ### 📧 Contact & Support
-        For issues or questions, please refer to the documentation or open an issue on GitHub.
         """)
-        
-        # Display model architecture summary
-        with st.expander("View Model Architecture"):
-            st.code("""
-ResNet18 (
-  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3))
-  (bn1): BatchNorm2d(64)
-  (relu): ReLU()
-  (maxpool): MaxPool2d(kernel_size=3, stride=2, padding=1)
-  (layer1): Sequential(...)
-  (layer2): Sequential(...)
-  (layer3): Sequential(...)
-  (layer4): Sequential(...)
-  (avgpool): AdaptiveAvgPool2d(output_size=(1, 1))
-  (fc): Linear(in_features=512, out_features=6)
-)
-            """)
 
 # -----------------------------
 # RUN APPLICATION
