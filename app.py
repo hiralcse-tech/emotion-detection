@@ -268,7 +268,37 @@ def plot_confidence_chart(probabilities):
     plt.tight_layout()
     
     return fig
+# Add this function temporarily to create a sample model
+def create_sample_model():
+    """Create a sample model for testing"""
+    import torch.nn as nn
+    from torchvision.models import resnet18, ResNet18_Weights
+    
+    model_path = "emotion_model.pth"
+    
+    if not os.path.exists(model_path):
+        with st.spinner("Creating sample model for testing..."):
+            model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+            model.fc = nn.Linear(model.fc.in_features, 6)
+            
+            # Save the model
+            torch.save(model.state_dict(), model_path)
+            st.success("✅ Sample model created successfully!")
+            return True
+    return False
 
+# Then in handle_model_loading(), add this at the beginning:
+def handle_model_loading():
+    """Handle model file upload and loading"""
+    
+    # TEMPORARY: Create sample model for testing
+    if st.button("🎯 Create Sample Model (for testing)"):
+        create_sample_model()
+        st.rerun()
+    
+    # Rest of your existing code...
+    model_path = "emotion_model.pth"
+    # ... rest of the function
 # -----------------------------
 # MODEL FILE HANDLER (Widgets outside cached function)
 # -----------------------------
